@@ -18,36 +18,31 @@
 #include "tusb_option.h"
 #include "generated/ws2812.pio.h"
 
-#define UART_ID1 uart0
-#define BAUD_RATE1 57600
-#define UART_TX_PIN1 16
-#define UART_RX_PIN1 17
-#define LED_PIN 25
 
 void measure_freqs(void);
 bool __no_inline_not_in_flash_func(get_bootsel_button)();
 void pll_358(PLL pll);
 void put_rgb(uint8_t red, uint8_t green, uint8_t blue);
+void setFiFo0(char data);
+void setFiFo1(char data);
+void transConsoleFiFo( void );
+
 
 //////////////////////////////////
 int main() {
     stdio_init_all();   //To use USB
 
     // 制御端子
-    gpio_init(2);
-    gpio_set_dir(2,GPIO_OUT);
-    gpio_init(3);
-    gpio_set_dir(3,GPIO_OUT);
 
-    // シリアル通信
-    gpio_set_function(UART_TX_PIN1, GPIO_FUNC_UART);
-    gpio_set_function(UART_RX_PIN1, GPIO_FUNC_UART);
-    gpio_pull_up(UART_RX_PIN1);
+    // シリアル通信1
+    gpio_set_function(8, GPIO_FUNC_UART);
+    gpio_set_function(9, GPIO_FUNC_UART);
+    gpio_pull_up(9);
 
-    /// 動作周波数を変更
-    ///pll_358(pll_sys);
-    ///clock_set_reported_hz(clk_sys ,229090909);
-    ///clock_set_reported_hz(clk_peri,229090909);
+    // シリアル通信0
+    gpio_set_function(12, GPIO_FUNC_UART);
+    gpio_set_function(13, GPIO_FUNC_UART);
+    gpio_pull_up(13);
 
     // WS2812初期化
     PIO pio = pio0;
@@ -64,16 +59,14 @@ int main() {
             sleep_ms(750);
         }while(--cnt);
 
-        printf("\nUSB⇔シリアル変換\n");
+        printf("\n２ポート  モニター\n");
 
         // Set up our UART with the required speed.
-        int res = uart_init(UART_ID1, BAUD_RATE1);
-        printf("\nボーレート = %d\n",res);
-        printf("pin(21) TX\n");
-        printf("pin(22) RX\n");
-        printf("pin(3) GND\n");
-        printf("pin(4) RTS\n");
-        printf("pin(5) DTR\n");
+        int res0 = uart_init(uart0, 57600);
+        int res1 = uart_init(uart1, 57600);
+        printf("\nボーレート = %d\n",res0);
+        printf("gpio(9) port1\n");
+        printf("gpio(13) port0\n");
     }
 
 
@@ -93,7 +86,8 @@ int main() {
         0,0,0
     };
 
-    int led_time = 300;
+    int led1_time = 300;
+    int led2_time = 300;
 
 
     timer_hw->pause = 0;
@@ -106,21 +100,27 @@ int main() {
     uint32_t time = time_us_32();
     while (true){
         //////////////////////////////////////////////////////////
-        ///////////////////////////////////////////// シリアル⇒USB
-        while( uart_is_readable(UART_ID1) ){    // 入力信号があれば
-            char data = uart_getc(UART_ID1);    // シリアルから情報を取り
-            printf("%c",data);                  // USB側へ出力
-            gpio_put(LED_PIN,1);                // LED点灯
-            led_time = 5;
+        ///////////////////////////////////////////// シリアル⇒USB  
+        while( uart_is_readable(uart0) ){       // 入力信号があれば
+            char data = uart_getc(uart0);       // シリアルから情報を取り
+            setFiFo0(data);
+            led1_time = 5;
         }
+        while( uart_is_readable(uart1) ){       // 入力信号があれば
+            char data = uart_getc(uart1);       // シリアルから情報を取り
+            setFiFo1(data);
+            led2_time = 5;
+        }
+
+        transConsoleFiFo();  // USBへ転送
 
         {   //// PCからの制御信号 ////
             uint8_t ggg = 15 & tud_cdc_n_get_line_state(0); // Bit 0:  DTR (Data Terminal Ready), Bit 1: RTS (Request to Send)
             if(rts_dtr != ggg){
                 rts_dtr = ggg;
                 int nn=ggg&1,mm=(ggg>>1)&1;
-                gpio_put(2,mm);     // RTS
-                gpio_put(3,nn);     // DTR
+                ///gpio_put(2,mm);     // RTS
+                ///gpio_put(3,nn);     // DTR
                 printf("\nRTS=%d DTR=%d\n",mm,nn);
             }
         }
@@ -131,7 +131,8 @@ int main() {
         if(tud_cdc_available() > 0){
             char getDAT;
             tud_cdc_read(&getDAT, 1);           // 情報があれば
-            uart_putc(UART_ID1,getDAT);         // UARTに投げる
+            uart_putc(uart0,getDAT);            // UARTに投げる
+            uart_putc(uart1,getDAT);            // UARTに投げる
         }else{
 
             /// 設定変更があれば ///
@@ -147,8 +148,9 @@ int main() {
             }
             if(back.bit_rate != param.bit_rate){
                 back.bit_rate = param.bit_rate;
-                int res = uart_init(UART_ID1, back.bit_rate);
-                printf("\n変更後ボーレート = %d\n",res);
+                int res0 = uart_init(uart0, back.bit_rate);
+                int res1 = uart_init(uart1, back.bit_rate);
+                printf("\n変更後ボーレート = %d\n",res0);
             }
         }
 
@@ -183,14 +185,93 @@ int main() {
             uint32_t tmp = time_us_32() - time; 
             if(tmp >= 1000){
                 time += 1000;
-                if(led_time > 0) led_time -= 1;
-                else gpio_put(LED_PIN,0);           // LED消灯
+
+                // LED制御
+                int rr = 0;
+                int bb = 0;
+                if(led1_time > 0) rr = 32;
+                if(led2_time > 0) bb = 32;
+                put_rgb(rr,0,bb);
+
+                if(led1_time > 0) led1_time -= 1;
+                if(led2_time > 0) led2_time -= 1;
             }
         }
 
 
     }//while loop
 }
+
+static uint8_t buf0[256],buf1[256];
+static uint8_t wp0=0,wp1=0;
+
+void setFiFo0(char data){
+    buf0[wp0++] = data;
+}
+void setFiFo1(char data){
+    buf1[wp1++] = data;
+}
+
+
+static uint8_t rp0=0,rp1=0;
+
+uint8_t chkfifo0( void ){
+    return (wp0 - rp0);
+}
+uint8_t chkfifo1( void ){
+    return (wp1 - rp1);
+}
+char peekFiFo0( int offset ){
+    if(offset >= chkfifo0() ) return 255;
+    uint8_t idx = rp0 + offset;
+    return buf0[idx];
+}
+char peekFiFo1( int offset ){
+    if(offset >= chkfifo1() ) return 255;
+    uint8_t idx = rp1 + offset;
+    return buf1[idx];
+}
+
+void transConsoleFiFo( void ){
+    char buff[256];
+    
+    for(int i = 0; i < chkfifo0();i++ ){
+        char cc = buff[i] = peekFiFo0(i);
+        if(cc != '\n') continue;
+        // 改行コードまで到達
+
+        if( tud_cdc_n_write_available(0) == 0 ) break;
+
+        printf("PORT0:");
+        for( int j=0; j <= i; j++ ){
+            tud_cdc_n_write_char(0, buff[j]);
+            rp0++;
+        }
+        tud_cdc_n_write_flush(0);
+        break;
+    }
+    for(int i = 0; i < chkfifo1();i++ ){
+        char cc = buff[i] = peekFiFo1(i);
+        if(cc != '\n') continue;
+        // 改行コードまで到達
+
+        if( tud_cdc_n_write_available(0) == 0 ) break;
+
+        printf("PORT1:");
+        for( int j=0; j <= i; j++ ){
+            tud_cdc_n_write_char(0, buff[j]);
+            rp1++;
+        }
+        tud_cdc_n_write_flush(0);
+        break;
+    }
+}
+
+
+
+
+
+
 
 ////////////////////////////////////////////////////////////
 //////////////////////////////////////////// 動作周波数を変更
