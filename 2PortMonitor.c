@@ -16,6 +16,7 @@
 #include "hardware/timer.h"
 #include "class/cdc/cdc_device.h"
 #include "tusb_option.h"
+#include "generated/ws2812.pio.h"
 
 #define UART_ID1 uart0
 #define BAUD_RATE1 57600
@@ -26,17 +27,11 @@
 void measure_freqs(void);
 bool __no_inline_not_in_flash_func(get_bootsel_button)();
 void pll_358(PLL pll);
-
+void put_rgb(uint8_t red, uint8_t green, uint8_t blue);
 
 //////////////////////////////////
 int main() {
     stdio_init_all();   //To use USB
-
-
-    // To use GPIO 25pin LED
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
-    gpio_put(LED_PIN,1);                        // LED点灯
 
     // 制御端子
     gpio_init(2);
@@ -50,10 +45,16 @@ int main() {
     gpio_pull_up(UART_RX_PIN1);
 
     /// 動作周波数を変更
-    pll_358(pll_sys);
-    clock_set_reported_hz(clk_sys ,229090909);
-    clock_set_reported_hz(clk_peri,229090909);
+    ///pll_358(pll_sys);
+    ///clock_set_reported_hz(clk_sys ,229090909);
+    ///clock_set_reported_hz(clk_peri,229090909);
 
+    // WS2812初期化
+    PIO pio = pio0;
+    int sm = 0;
+    uint offset = pio_add_program(pio, &ws2812_program);
+    ws2812_program_init(pio, sm, offset, 16, 800000, true);
+    put_rgb(64,64,64);   // White
 
     {   /// 初期情報を提供 ///
         int cnt = 2;
@@ -252,3 +253,16 @@ void measure_freqs(void) {
 
     // Can't measure clk_ref / xosc as it is the ref
 }
+
+
+void put_pixel(uint32_t pixel_grb)
+{
+    pio_sm_put_blocking(pio0, 0, pixel_grb << 8u);
+}
+void put_rgb(uint8_t red, uint8_t green, uint8_t blue)
+{
+    uint32_t mask = (green << 16) | (red << 8) | (blue << 0);
+    put_pixel(mask);
+}
+
+//eof
