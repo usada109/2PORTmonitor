@@ -1,0 +1,6 @@
+_deps
+CMakeFiles
+generated
+pico-sdk
+picotool
+!.vscode/*
