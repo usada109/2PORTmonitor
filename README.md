@@ -1,19 +1,34 @@
-# FamiCAS dual USB CDC bridge
+# FamiCAS dual USB CDC bridge (`2PORTmonitor` / `2portserial`)
 
-The RP2040 exposes two independent Windows COM ports so ROM programming data
-and FC debug output can never be mixed.
+The RP2040 exposes two independent Windows COM ports so the current PIC debug
+UART and FC debug/RAMGO traffic can never be mixed.
 
-## CDC 0: ROM writer
+## CDC 0: transparent 921600-baud bridge
 
 ```text
-ROMWRITER_Host <-> USB CDC 0 <-> UART0 <-> ROMWRITER_handmade
-                                      GPIO12 TX
-                                      GPIO13 RX
-                                      921600 baud, 8N1
+PC <-> USB CDC 0 <-> UART0
+                       GPIO12 TX
+                       GPIO13 RX
+                       921600 baud, 8N1
 ```
 
 CDC 0 is a byte-for-byte binary bridge. It adds no prefixes, line endings, or
-startup messages. Select this COM port in `ROMWRITER_Host`.
+startup messages. It was originally used for `ROMWRITER_Host`, but the current
+FamiCAS bench wiring replaces the former FTDI/COM7 PIC debug adapter:
+
+```text
+Pico GPIO12 TX -> PIC RF3 / UART1 RX
+Pico GPIO13 RX <- PIC RF4 / UART1 TX
+```
+
+The observed Windows name was COM13. PIC-to-PC receive was reverified from the
+PIC BOOT banner through the application startup log at 921600 baud. PC-to-PIC
+transmit through this new wiring has not yet been rerun; use the existing PIC
+UART1 binary PING when that direction is next required. The final PIC firmware
+does not emit periodic debug text, so reset the PIC to prove the receive path.
+
+To use this CDC for `ROMWRITER_Host` again, restore the physical GPIO12/13
+writer wiring first. Changing only the Windows application is not sufficient.
 
 ## CDC 1: FC printf and half-duplex test
 
@@ -96,8 +111,45 @@ $port.Close()
 The first installation of a firmware containing this feature still requires
 the BOOTSEL button. Subsequent UF2 updates do not.
 
+## Windows port identification and cautions
+
+Both ports belong to one USB device (`VID:PID CAFE:4002`) and therefore share
+the same Pico USB serial number. CDC0 appears as interface `MI_00`; CDC1 appears
+as `MI_02`. The observed numbers COM13/COM14 are not permanent.
+
+- Open CDC0 at 921600 baud for the PIC bridge.
+- Open CDC1 at 300000 baud for FC printf/RAMGO.
+- The selected USB line coding changes the corresponding hardware UART baud.
+- Selecting 1200 baud on either CDC requests BOOTSEL; do not select it by accident.
+- Only one process can own each COM port. Close a terminal before a RAMGO uploader
+  opens CDC1.
+- CDC1 emits a Pico status line every second. It may appear between fragments of
+  a long FC line; parsers must buffer to LF and handle this interleaving.
+- If CDC1 remains closed while FC output continues, the finite Pico ring can
+  overflow. A sequence gap immediately after reopening is not by itself an FC
+  soft-UART failure.
+
 ## Build output
 
 ```text
 build_famicas/2PORTmonitor.uf2
 ```
+
+The hardware-verified UF2 was built from firmware commit
+`bb908c08331ff1aec3190fcc9209e8df99f46069` and has SHA-256
+`79E02378AB1E46E8E3253005D290F8EEEEE037D8A069A4C29EB3B9B1B7FDB45B`.
+
+```text
+PICO_BOARD:    pico
+build type:    Release
+Pico SDK:      2.2.0
+Arm GCC:       14.2.1 / Arm GNU Toolchain 14.2.Rel1
+CMake:         3.25.0
+Ninja:         1.13.0
+C standard:    C11
+C++ standard:  C++17
+```
+
+A copy of the exact UF2 and a complete toolchain manifest are committed in the
+FamiCAS repository at
+`BINARY/2MB対応版/自己更新_20260806/PICO_2PORTmonitor.uf2` and its `README.md`.
